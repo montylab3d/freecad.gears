@@ -803,6 +803,7 @@ class BevelGear(BaseGear):
         obj.addProperty("App::PropertyAngle", "pitch_angle", "involute", "pitch_angle")
         obj.addProperty("App::PropertyAngle", "pressure_angle", "involute_parameter", "pressure_angle")
         obj.addProperty("App::PropertyLength", "module", "base", "module")
+        obj.addProperty("App::PropertyFloat", "shift", "involute", "shift")
         obj.addProperty("App::PropertyFloat", "clearance", "tolerance", "clearance")
         obj.addProperty("App::PropertyInteger", "numpoints", "precision", "number of points for spline")
         obj.addProperty("App::PropertyBool", "reset_origin", "base", "if value is true the gears outer face will match the z=0 plane")
@@ -813,6 +814,7 @@ class BevelGear(BaseGear):
         obj.module = '1. mm'
         obj.teeth = 15
         obj.pressure_angle = '20. deg'
+        obj.shift = 0.
         obj.pitch_angle = '45. deg'
         obj.height = '5. mm'
         obj.numpoints = 6
@@ -826,21 +828,19 @@ class BevelGear(BaseGear):
     def generate_gear_shape(self, fp):
         fp.gear.z = fp.teeth
         fp.gear.module = fp.module.Value
-        fp.gear.pressure_angle = (90 - fp.pressure_angle.Value) * np.pi / 180.
+        fp.gear.pressure_angle = fp.pressure_angle.Value * np.pi / 180.
         fp.gear.pitch_angle = fp.pitch_angle.Value * np.pi / 180
         max_height = fp.gear.module * fp.teeth / 2 / np.tan(fp.gear.pitch_angle)
         if fp.height >= max_height:
             App.Console.PrintWarning("height must be smaller than {}".format(max_height))
         fp.gear.backlash = fp.backlash.Value
-        scale = fp.module.Value * fp.gear.z / 2 / \
-            np.tan(fp.pitch_angle.Value * np.pi / 180)
-        fp.gear.clearance = fp.clearance / scale
+        fp.gear.clearance = fp.clearance
+        fp.gear.shift = fp.shift
         fp.gear._update()
+        scale0 = fp.gear.X
+        scale1 = fp.gear.X - fp.height.Value
         pts = list(fp.gear.points(num=fp.numpoints))
-        rot = rotation3D(2 * np.pi / fp.teeth)
-        # if fp.beta.Value != 0:
-        #     pts = [np.array([self.spherical_rot(j, fp.beta.Value * np.pi / 180.) for j in i]) for i in pts]
-
+        rot = rotation3D(-2 * np.pi / fp.teeth)
         rotated_pts = pts
         for i in range(fp.gear.z - 1):
             rotated_pts = list(map(rot, rotated_pts))
@@ -848,17 +848,13 @@ class BevelGear(BaseGear):
             pts += rotated_pts
         pts.append(np.array([pts[-1][-1], pts[0][0]]))
         wires = []
-        if not "version" in fp.PropertiesList:
-            scale_0 = scale - fp.height.Value / 2
-            scale_1 = scale + fp.height.Value / 2
-        else: # starting with version 0.0.2
-            scale_0 = scale - fp.height.Value
-            scale_1 = scale
         if fp.beta.Value == 0:
-            wires.append(make_bspline_wire([scale_0 * p for p in pts]))
-            wires.append(make_bspline_wire([scale_1 * p for p in pts]))
+            wires.append(make_bspline_wire([scale0 * p for p in pts]))
+            wires.append(make_bspline_wire([scale1 * p for p in pts]))
         else:
-            for scale_i in np.linspace(scale_0, scale_1, 20):
+            # helicalextrusion could be extended to do
+            # this.  helical spirals are supported...
+            for scale_i in np.linspace(1., scale_1, 20):
                 # beta_i = (scale_i - scale_0) * fp.beta.Value * np.pi / 180
                 # rot = rotation3D(beta_i)
                 # points = [rot(pt) * scale_i for pt in pts]
@@ -875,31 +871,6 @@ class BevelGear(BaseGear):
             mat.move(fcvec([0, 0, scale_1]))
             shape = shape.transformGeometry(mat)
         return shape
-        # return self.create_teeth(pts, pos1, fp.teeth)
-
-    def create_tooth(self):
-        w = []
-        scal1 = self.obj.m.Value * self.obj.gear.z / 2 / np.tan(
-            self.obj.pitch_angle.Value * np.pi / 180) - self.obj.height.Value / 2
-        scal2 = self.obj.m.Value * self.obj.gear.z / 2 / np.tan(
-            self.obj.pitch_angle.Value * np.pi / 180) + self.obj.height.Value / 2
-        s = [scal1, scal2]
-        pts = self.obj.gear.points(num=self.obj.numpoints)
-        for j, pos in enumerate(s):
-            w1 = []
-
-            def scale(x): return fcvec(x * pos)
-            for i in pts:
-                i_scale = list(map(scale, i))
-                w1.append(i_scale)
-            w.append(w1)
-        surfs = []
-        w_t = zip(*w)
-        for i in w_t:
-            b = BSplineSurface()
-            b.interpolate(i)
-            surfs.append(b)
-        return Shape(surfs)
 
     def spherical_rot(self, point, phi):
         new_phi = np.sqrt(np.linalg.norm(point)) * phi
@@ -1509,6 +1480,12 @@ def make_bspline_wire(pts):
         out = BSplineCurve()
         out.interpolate(list(map(fcvec, i)))
         wi.append(out.toShape())
+    return Wire(wi)
+
+def make_wire(pts):
+    wi = []
+    for i in pts:
+        wi.append(makePolygon(list(map(fcvec, i))))
     return Wire(wi)
 
 
